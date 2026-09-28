@@ -1,0 +1,112 @@
+version: "3"
+
+# Taskfile (go-task). Run `task <name>`. Install: go install github.com/go-task/task/v3/cmd/task@latest
+# No Makefile in this repo by convention.
+
+dotenv: [".env"]
+
+tasks:
+  default:
+    desc: List tasks
+    cmds:
+      - task --list
+
+  tools:task:
+    desc: Install the task runner itself
+    cmds:
+      - go install github.com/go-task/task/v3/cmd/task@latest
+
+  cli:
+    desc: 'Run any jobtracker CLI command (example: task cli ARGS="stats")'
+    cmds:
+      - go run ./cmd/jobtracker {{.ARGS}}
+
+  list:
+    desc: List applications
+    cmds:
+      - task: cli
+        vars: { ARGS: list }
+
+  show:
+    desc: Show one application (ID=123)
+    cmds:
+      - go run ./cmd/jobtracker show --id "{{.ID}}"
+
+  add:
+    desc: Add an application (COMPANY="..." TITLE="..." [STATUS=...] [LOCATION=...] [SOURCE=...] [JOB_URL=...] [NOTES=...] [APPLIED_AT=...])
+    cmds:
+      - go run ./cmd/jobtracker add --company "{{.COMPANY}}" --title "{{.TITLE}}" --status "{{.STATUS | default "applied"}}" --location "{{.LOCATION}}" --source "{{.SOURCE}}" --job-url "{{.JOB_URL}}" --notes "{{.NOTES}}" --applied-at "{{.APPLIED_AT}}"
+
+  update:
+    desc: Update an application (ID=123 [COMPANY=...] [TITLE=...] [STATUS=...] [LOCATION=...] [SOURCE=...] [JOB_URL=...] [NOTES=...] [APPLIED_AT=...])
+    cmds:
+      - >-
+        go run ./cmd/jobtracker update --id "{{.ID}}"
+        {{if .COMPANY}}--company "{{.COMPANY}}" {{end}}
+        {{if .TITLE}}--title "{{.TITLE}}" {{end}}
+        {{if .STATUS}}--status "{{.STATUS}}" {{end}}
+        {{if .LOCATION}}--location "{{.LOCATION}}" {{end}}
+        {{if .SOURCE}}--source "{{.SOURCE}}" {{end}}
+        {{if .JOB_URL}}--job-url "{{.JOB_URL}}" {{end}}
+        {{if .NOTES}}--notes "{{.NOTES}}" {{end}}
+        {{if .APPLIED_AT}}--applied-at "{{.APPLIED_AT}}" {{end}}
+
+  stats:
+    desc: Show application counts
+    cmds:
+      - task: cli
+        vars: { ARGS: stats }
+
+  export:
+    desc: Export applications as CSV ([FILE=applications.csv])
+    cmds:
+      - go run ./cmd/jobtracker export{{if .FILE}} --file "{{.FILE}}"{{end}}
+
+  delete:
+    desc: Delete an application (ID=123)
+    cmds:
+      - go run ./cmd/jobtracker delete --id "{{.ID}}"
+
+  tui:
+    desc: Open the interactive terminal dashboard
+    cmds:
+      - task: cli
+        vars: { ARGS: tui }
+
+  dev:
+    desc: Migrate up then list applications
+    cmds:
+      - task: migrate
+      - task: list
+
+  migrate:
+    desc: Apply pending SQL migrations (up)
+    cmds:
+      - go run ./cmd/migrate up
+
+  migrate-down:
+    desc: Roll back the latest migration
+    cmds:
+      - go run ./cmd/migrate down
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: go vet
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - gofmt -l -w .
+
+  check:
+    desc: Format check + vet + tests
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
