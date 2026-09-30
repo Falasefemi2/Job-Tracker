@@ -12,14 +12,17 @@ import (
 	"github.com/Falasefemi2/jobtracker/internal/db"
 	"github.com/Falasefemi2/jobtracker/internal/domain"
 	"github.com/Falasefemi2/jobtracker/internal/repo"
+	"github.com/Falasefemi2/jobtracker/internal/shortener"
 	"github.com/Falasefemi2/jobtracker/internal/tui"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )
 
 var (
-	sqlDB   *sql.DB
-	appRepo *repo.ApplicationRepo
+	sqlDB         *sql.DB
+	appRepo       *repo.ApplicationRepo
+	urlRepo       *repo.URLRepo
+	linkShortener *shortener.Shortener
 )
 
 type applicationInput struct {
@@ -53,6 +56,8 @@ func run() error {
 			}
 			sqlDB = d
 			appRepo = repo.NewApplicationRepo(sqlDB)
+			urlRepo = repo.NewURLRepo(sqlDB)
+			linkShortener = shortener.New(urlRepo, os.Getenv("BASE_URL"))
 			return nil
 		},
 	}
@@ -120,7 +125,11 @@ func newShowCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cmd.Printf("ID: %d\nCompany: %s\nTitle: %s\nStatus: %s\nLocation: %s\nSource: %s\nJob URL: %s\nNotes: %s\nApplied: %s\nCreated: %s\nUpdated: %s\n",
+			shortLink, err := linkShortener.Lookup(cmd.Context(), a.JobURL)
+			if err != nil {
+				return err
+			}
+			cmd.Printf("ID: %d\nCompany: %s\nTitle: %s\nStatus: %s\nLocation: %s\nSource: %s\nJob URL: %s\nShort Link: %s\nNotes: %s\nApplied: %s\nCreated: %s\nUpdated: %s\n",
 				a.ID,
 				a.Company,
 				a.JobTitle,
@@ -128,6 +137,7 @@ func newShowCommand() *cobra.Command {
 				a.Location,
 				a.Source,
 				a.JobURL,
+				displayShortLink(shortLink),
 				a.Notes,
 				a.AppliedAt.Format(time.RFC3339),
 				a.CreatedAt.Format(time.RFC3339),
@@ -161,18 +171,26 @@ func newAddCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			jobURL, shortLink, err := prepareJobURL(cmd.Context(), input.jobURL)
+			if err != nil {
+				return err
+			}
 			id, err := appRepo.Create(cmd.Context(), domain.Application{
 				Company:   strings.TrimSpace(input.company),
 				JobTitle:  strings.TrimSpace(input.title),
 				Status:    status,
 				Location:  input.location,
 				Source:    input.source,
-				JobURL:    input.jobURL,
+				JobURL:    jobURL,
 				Notes:     input.notes,
 				AppliedAt: appliedAt,
 			})
 			if err != nil {
 				return err
+			}
+			if shortLink != "" {
+				cmd.Printf("Created application ID %d\nShort link: %s\n", id, shortLink)
+				return nil
 			}
 			cmd.Printf("Created application ID %d\n", id)
 			return nil
@@ -197,6 +215,7 @@ func newUpdateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var updatedShortLink string
 			if cmd.Flags().Changed("company") {
 				updated.Company = input.company
 			}
@@ -217,7 +236,12 @@ func newUpdateCommand() *cobra.Command {
 				updated.Source = input.source
 			}
 			if cmd.Flags().Changed("job-url") {
-				updated.JobURL = input.jobURL
+				jobURL, shortLink, err := prepareJobURL(cmd.Context(), input.jobURL)
+				if err != nil {
+					return err
+				}
+				updated.JobURL = jobURL
+				updatedShortLink = shortLink
 			}
 			if cmd.Flags().Changed("notes") {
 				updated.Notes = input.notes
@@ -240,6 +264,10 @@ func newUpdateCommand() *cobra.Command {
 			}
 			if err := appRepo.Update(cmd.Context(), id, updated); err != nil {
 				return err
+			}
+			if updatedShortLink != "" {
+				cmd.Printf("Updated application ID %d\nShort link: %s\n", id, updatedShortLink)
+				return nil
 			}
 			cmd.Printf("Updated application ID %d\n", id)
 			return nil
@@ -325,9 +353,33 @@ func newTUICommand() *cobra.Command {
 		Short: "Open the interactive terminal dashboard",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return tui.Run(cmd.Context(), appRepo)
+			return tui.Run(cmd.Context(), appRepo, linkShortener)
 		},
 	}
+}
+
+// prepareJobURL normalizes a job URL for storage and returns it with the short
+// link minted for it, so saving a posting never leaves it without one.
+func prepareJobURL(ctx context.Context, raw string) (jobURL, shortLink string, err error) {
+	jobURL, err = shortener.Normalize(raw)
+	if err != nil {
+		return "", "", err
+	}
+	if jobURL == "" {
+		return "", "", nil
+	}
+	shortLink, err = linkShortener.Shorten(ctx, jobURL)
+	if err != nil {
+		return "", "", err
+	}
+	return jobURL, shortLink, nil
+}
+
+func displayShortLink(shortLink string) string {
+	if shortLink == "" {
+		return "-"
+	}
+	return shortLink
 }
 
 func addApplicationFlags(cmd *cobra.Command, input *applicationInput, defaultStatus string) {

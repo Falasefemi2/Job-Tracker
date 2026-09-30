@@ -78,6 +78,39 @@ func (f *fakeStore) ExportAsCSV(ctx context.Context, w io.Writer) error {
 	return writer.Error()
 }
 
+type fakeShortener struct {
+	shortened []string
+	links     map[string]string
+	shortErr  error
+	lookupErr error
+}
+
+func (f *fakeShortener) Shorten(ctx context.Context, rawURL string) (string, error) {
+	if rawURL == "" {
+		return "", nil
+	}
+	if f.shortErr != nil {
+		return "", f.shortErr
+	}
+	f.shortened = append(f.shortened, rawURL)
+	if f.links == nil {
+		f.links = map[string]string{}
+	}
+	link, ok := f.links[rawURL]
+	if !ok {
+		link = "http://localhost:8080/s/" + strings.ToUpper(rawURL[len(rawURL)-1:])
+		f.links[rawURL] = link
+	}
+	return link, nil
+}
+
+func (f *fakeShortener) Lookup(ctx context.Context, longURL string) (string, error) {
+	if f.lookupErr != nil {
+		return "", f.lookupErr
+	}
+	return f.links[longURL], nil
+}
+
 func testApps() []domain.Application {
 	return []domain.Application{
 		{ID: 1, Company: "Acme", JobTitle: "Backend Engineer", Status: domain.StatusApplied, Notes: "via recruiter"},
@@ -88,7 +121,12 @@ func testApps() []domain.Application {
 
 func loadModel(t *testing.T, store *fakeStore) Model {
 	t.Helper()
-	model := NewModel(context.Background(), store)
+	return loadModelWith(t, store, &fakeShortener{})
+}
+
+func loadModelWith(t *testing.T, store *fakeStore, shortener *fakeShortener) Model {
+	t.Helper()
+	model := NewModel(context.Background(), store, shortener)
 	msg := model.Init()()
 	updated, _ := model.Update(msg)
 	loaded, ok := updated.(Model)
@@ -294,6 +332,91 @@ func TestAddFormValidationAndSave(t *testing.T) {
 	}
 	if len(store.created) != 1 || store.created[0].Company != "Umbrella" {
 		t.Fatalf("expected created application, got %+v", store.created)
+	}
+}
+
+func TestAddFormShortensJobURL(t *testing.T) {
+	store := &fakeStore{apps: testApps()}
+	shortener := &fakeShortener{}
+	model := loadModelWith(t, store, shortener)
+
+	updated, _ := model.Update(keyMsg("a"))
+	model = updated.(Model)
+	model.form.fields[fieldCompany].SetValue("Umbrella")
+	model.form.fields[fieldTitle].SetValue("QA Engineer")
+	model.form.fields[fieldJobURL].SetValue("boards.greenhouse.io/umbrella/jobs/1")
+
+	updatedModel, cmd := model.submitForm()
+	model = updatedModel
+	if cmd == nil {
+		t.Fatal("expected save command")
+	}
+	saved := cmd()
+	msg, ok := saved.(applicationSavedMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("expected saved message, got %#v", saved)
+	}
+
+	if len(shortener.shortened) != 1 || shortener.shortened[0] != "https://boards.greenhouse.io/umbrella/jobs/1" {
+		t.Fatalf("expected normalized URL to be shortened, got %+v", shortener.shortened)
+	}
+	if len(store.created) != 1 || store.created[0].JobURL != "https://boards.greenhouse.io/umbrella/jobs/1" {
+		t.Fatalf("expected the long URL to be stored, got %+v", store.created)
+	}
+	if msg.shortLink == "" {
+		t.Fatal("expected a short link on the saved message")
+	}
+
+	updated, _ = model.Update(msg)
+	model = updated.(Model)
+	if !strings.Contains(model.notice, msg.shortLink) {
+		t.Fatalf("expected notice to carry the short link, got %q", model.notice)
+	}
+}
+
+func TestAddFormRejectsInvalidJobURL(t *testing.T) {
+	store := &fakeStore{apps: testApps()}
+	shortener := &fakeShortener{}
+	model := loadModelWith(t, store, shortener)
+
+	updated, _ := model.Update(keyMsg("a"))
+	model = updated.(Model)
+	model.form.fields[fieldCompany].SetValue("Umbrella")
+	model.form.fields[fieldTitle].SetValue("QA Engineer")
+	model.form.fields[fieldJobURL].SetValue("ftp://files.example.com/job")
+
+	updatedModel, cmd := model.submitForm()
+	model = updatedModel
+	if cmd != nil || !strings.Contains(model.formErr, "http and https") {
+		t.Fatalf("expected scheme validation error, got %q", model.formErr)
+	}
+	if len(store.created) != 0 || len(shortener.shortened) != 0 {
+		t.Fatal("expected nothing saved or shortened")
+	}
+}
+
+func TestDetailShowsShortLink(t *testing.T) {
+	store := &fakeStore{apps: []domain.Application{
+		{ID: 1, Company: "Acme", JobTitle: "Backend Engineer", Status: domain.StatusApplied, JobURL: "https://acme.example.com/jobs/7"},
+	}}
+	shortener := &fakeShortener{links: map[string]string{
+		"https://acme.example.com/jobs/7": "http://localhost:8080/s/aB3xK9z",
+	}}
+	model := loadModelWith(t, store, shortener)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected short link lookup command")
+	}
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+
+	if model.shortLink != "http://localhost:8080/s/aB3xK9z" {
+		t.Fatalf("expected short link on the model, got %q", model.shortLink)
+	}
+	if view := model.View(); !strings.Contains(view, "http://localhost:8080/s/aB3xK9z") {
+		t.Fatal("expected detail view to render the short link")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Falasefemi2/jobtracker/internal/domain"
+	"github.com/Falasefemi2/jobtracker/internal/shortener"
 )
 
 type applicationStore interface {
@@ -22,6 +23,11 @@ type applicationStore interface {
 	Update(ctx context.Context, id int64, a domain.Application) error
 	Delete(ctx context.Context, id int64) error
 	ExportAsCSV(ctx context.Context, w io.Writer) error
+}
+
+type linkShortener interface {
+	Shorten(ctx context.Context, rawURL string) (string, error)
+	Lookup(ctx context.Context, longURL string) (string, error)
 }
 
 type viewMode int
@@ -50,12 +56,13 @@ type formModel struct {
 }
 
 type Model struct {
-	ctx    context.Context
-	store  applicationStore
-	view   viewMode
-	apps   []domain.Application
-	filter []domain.Application
-	stats  domain.Stats
+	ctx       context.Context
+	store     applicationStore
+	shortener linkShortener
+	view      viewMode
+	apps      []domain.Application
+	filter    []domain.Application
+	stats     domain.Stats
 
 	cursor int
 	offset int
@@ -69,9 +76,10 @@ type Model struct {
 	search    textinput.Model
 	query     string
 
-	selected domain.Application
-	form     formModel
-	formErr  string
+	selected  domain.Application
+	shortLink string
+	form      formModel
+	formErr   string
 
 	statusEditing bool
 	pendingStatus domain.Status
@@ -95,8 +103,14 @@ type dataLoadedMsg struct {
 }
 
 type applicationSavedMsg struct {
-	id  int64
-	err error
+	id        int64
+	shortLink string
+	err       error
+}
+
+type shortLinkMsg struct {
+	link string
+	err  error
 }
 
 type statusSavedMsg struct {
@@ -114,7 +128,7 @@ type exportSavedMsg struct {
 	err  error
 }
 
-func NewModel(ctx context.Context, store applicationStore) Model {
+func NewModel(ctx context.Context, store applicationStore, shortener linkShortener) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -131,8 +145,9 @@ func NewModel(ctx context.Context, store applicationStore) Model {
 	exportInput.Width = 52
 
 	return Model{
-		ctx:   ctx,
-		store: store,
+		ctx:       ctx,
+		store:     store,
+		shortener: shortener,
 		statuses: []string{
 			"all",
 			string(domain.StatusApplied),
@@ -154,11 +169,14 @@ func (m *Model) clearOpErr() {
 	m.opErr = ""
 }
 
-func Run(ctx context.Context, store applicationStore) error {
+func Run(ctx context.Context, store applicationStore, shortener linkShortener) error {
 	if store == nil {
 		return errors.New("application store is required")
 	}
-	program := tea.NewProgram(NewModel(ctx, store), tea.WithAltScreen())
+	if shortener == nil {
+		return errors.New("link shortener is required")
+	}
+	program := tea.NewProgram(NewModel(ctx, store, shortener), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
 }
@@ -235,9 +253,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.form = newForm()
 		m.formErr = ""
 		m.view = viewList
-		m.notice = fmt.Sprintf("Created application #%d", msg.id)
+		m.notice = "Created application #" + itoa(int(msg.id))
+		if msg.shortLink != "" {
+			m.notice += " — " + msg.shortLink
+		}
 		m.loading = true
 		return m, m.reload()
+	case shortLinkMsg:
+		if msg.err != nil {
+			m.opErr = "Could not resolve short link: " + msg.err.Error()
+			return m, nil
+		}
+		m.opErr = ""
+		m.shortLink = msg.link
+		return m, nil
 	case statusSavedMsg:
 		if msg.err != nil {
 			m.statusErr = "Could not save status: " + msg.err.Error()
@@ -334,7 +363,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selected = m.filter[m.cursor]
 		m.view = viewDetail
 		m.notice = ""
-		return m, nil
+		m.shortLink = ""
+		return m, m.lookupShortLink(m.selected)
 	case "a":
 		m.form = newForm()
 		m.formErr = ""
@@ -467,11 +497,13 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if !m.statusEditing {
 			m.moveSelection(-1)
+			return m, m.lookupShortLink(m.selected)
 		}
 		return m, nil
 	case "down", "j":
 		if !m.statusEditing {
 			m.moveSelection(1)
+			return m, m.lookupShortLink(m.selected)
 		}
 		return m, nil
 	case "r":
@@ -571,21 +603,46 @@ func (m Model) submitForm() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.formErr = ""
+	rawJobURL := strings.TrimSpace(m.form.fields[fieldJobURL].Value())
+	jobURL, err := shortener.Normalize(rawJobURL)
+	if err != nil {
+		m.formErr = err.Error()
+		return m, nil
+	}
 	app := domain.Application{
 		Company:   company,
 		JobTitle:  title,
 		Status:    status,
 		Location:  strings.TrimSpace(m.form.fields[fieldLocation].Value()),
 		Source:    strings.TrimSpace(m.form.fields[fieldSource].Value()),
-		JobURL:    strings.TrimSpace(m.form.fields[fieldJobURL].Value()),
+		JobURL:    jobURL,
 		Notes:     strings.TrimSpace(m.form.fields[fieldNotes].Value()),
 		AppliedAt: appliedAt,
 	}
 	store := m.store
 	ctx := m.ctx
+	shortener := m.shortener
 	return m, func() tea.Msg {
+		link := ""
+		if shortener != nil {
+			if link, err = shortener.Shorten(ctx, jobURL); err != nil {
+				return applicationSavedMsg{err: err}
+			}
+		}
 		id, err := store.Create(ctx, app)
-		return applicationSavedMsg{id: id, err: err}
+		return applicationSavedMsg{id: id, shortLink: link, err: err}
+	}
+}
+
+func (m Model) lookupShortLink(app domain.Application) tea.Cmd {
+	if m.shortener == nil || strings.TrimSpace(app.JobURL) == "" {
+		return nil
+	}
+	shortener := m.shortener
+	ctx := m.ctx
+	return func() tea.Msg {
+		link, err := shortener.Lookup(ctx, app.JobURL)
+		return shortLinkMsg{link: link, err: err}
 	}
 }
 
