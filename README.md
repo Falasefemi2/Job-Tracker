@@ -8,6 +8,7 @@ It has two parts: a plain CLI for quick add / list / update work, and a full-scr
 
 - Store every application in one place: company, role, status, location, source, job link, notes, and dates.
 - Move applications through stages: applied, screening, interviewing, offer, accepted, rejected, withdrawn.
+- Shorten every job URL you enter into a shareable link, and resolve it back to the posting with a small redirect server.
 - Browse and search in the terminal dashboard with keyboard shortcuts.
 - Get quick counts by stage.
 - Export everything to CSV when you want to look at it in a spreadsheet or back it up.
@@ -18,6 +19,7 @@ It has two parts: a plain CLI for quick add / list / update work, and a full-scr
 - **Postgres + pgx** — storage. Migrations are plain SQL files in `migrations/`.
 - **Cobra** — the CLI commands (`list`, `show`, `add`, and so on).
 - **Bubble Tea + Bubbles + Lipgloss** — the interactive terminal UI.
+- **net/http** — the short link redirect server (`cmd/serve`).
 - **godotenv** — loads `DATABASE_URL` from `.env` in development.
 - **go-task** — short task aliases so you do not have to remember long `go run` commands.
 
@@ -186,9 +188,49 @@ go run ./cmd/jobtracker delete --id 1
 
 The CLI will reject bad input early with a plain message — missing `--company`, an unknown status, or a date it cannot parse. Dates accept `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, or RFC3339.
 
+## Short links
+
+Job posting URLs get long. Whenever you enter one — via `add`, via `update --job-url`, or in the TUI add form — jobtracker stores the URL and mints a short code for it, then shows you the link:
+
+```
+$ go run ./cmd/jobtracker add --company Acme --title "Backend Engineer" \
+    --job-url boards.greenhouse.io/acme/jobs/4821
+Created application ID 12
+Short link: http://localhost:8080/s/aB3xK9z
+```
+
+A few behaviours worth knowing:
+
+- A bare host such as `boards.greenhouse.io/acme/jobs/4821` gets `https://` added automatically. Only `http` and `https` are accepted.
+- The long URL stays in `applications.job_url`, so CSV exports and the app remain meaningful even when the server is down. The short code lives in its own table.
+- The same URL always gets the same short link, so applying to the same posting twice does not create a second code.
+- `show` prints the short link, and the TUI detail view has a **Short Link** row.
+
+To follow a short link, run the redirect server:
+
+```
+task serve
+# or
+go run ./cmd/serve
+```
+
+```
+$ curl -i http://localhost:8080/s/aB3xK9z
+HTTP/1.1 302 Found
+Location: https://boards.greenhouse.io/acme/jobs/4821
+```
+
+Set `BASE_URL` to the public address so the links you hand out point somewhere real:
+
+```
+BASE_URL=https://jt.example.com ADDR=:8080 go run ./cmd/serve
+```
+
+`BASE_URL` sets the domain in generated links; `ADDR` sets where the process listens (it defaults to the port in `BASE_URL`, or `8080`).
+
 ## Data model
 
-One table, `applications`:
+Two tables. `applications`:
 
 | Column | Type | Notes |
 | ------ | ---- | ----- |
@@ -198,11 +240,20 @@ One table, `applications`:
 | status | text, default `applied` | One of the statuses below |
 | location | text, nullable | e.g. Remote, Lagos, London |
 | source | text, nullable | e.g. LinkedIn, referral, company site |
-| job_url | text, nullable | Link to the posting |
+| job_url | text, nullable | Link to the posting, normalized on save |
 | notes | text, nullable | Anything you want to remember |
 | applied_at | timestamptz, default now() | When you applied |
 | created_at | timestamptz, default now() | When the row was created |
 | updated_at | timestamptz, default now() | Last update |
+
+And `short_urls`, backing the short links:
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| code | text | Primary key, 7-character base62 |
+| long_url | text, required, unique | The original posting URL |
+| clicks | bigint, default 0 | Incremented on every redirect |
+| created_at | timestamptz, default now() | When the row was created |
 
 Valid statuses:
 
@@ -218,23 +269,28 @@ Status input is case-insensitive, so `Offer`, `OFFER`, and `offer` all work.
 cmd/
   jobtracker/main.go   Entry point for the CLI and TUI. Cobra commands live here.
   migrate/main.go      Minimal migration runner (up / down), no external tool needed.
+  serve/main.go        Short link redirect server.
 internal/
   db/                  Opens the Postgres connection with pgx.
-  domain/              Core types: Application, Status, Stats. No database code.
-  repo/                SQL queries: create, list, get, update, delete, stats, CSV export.
+  domain/              Core types: Application, Status, Stats, ShortURL. No database code.
+  repo/                SQL queries: applications CRUD, stats, CSV export, short_urls.
+  shortener/           URL normalization, base62 code generation, short link building.
   tui/                 Dashboard. ui.go holds state and key handling, view.go holds rendering.
+  web/                 HTTP handler behind the short links.
 migrations/
   00001_...up.sql     Creates the applications table.
   00001_...down.sql   Drops it again for rollback.
+  00002_...up.sql     Creates the short_urls table.
+  00002_...down.sql   Drops it again for rollback.
 Taskfile.yml           Short aliases for common commands.
-learning.md            Notes on how the terminal UI is built, if you want to learn from it.
 ```
 
 A few design choices worth knowing:
 
-- The TUI never talks to SQL directly. It goes through a small `applicationStore` interface, which is why the UI can be tested with a fake store and no database.
+- The TUI never talks to SQL directly. It goes through a small `applicationStore` interface, which is why the UI can be tested with a fake store and no database. Short links work the same way through a `linkShortener` interface.
 - Rendering (`view.go`) does no database or file work. All slow work runs as Bubble Tea commands so the UI stays responsive.
 - Migrations are intentionally simple — numbered `.up.sql` / `.down.sql` files plus a `schema_migrations` table. No ORM, no extra dependency.
+- Short codes come from `crypto/rand` with modulo bias rejected, so codes are unguessable and evenly distributed. No base62 library needed.
 
 ## Development
 
@@ -259,17 +315,17 @@ task migrate-down
 go run ./cmd/migrate down
 ```
 
-Add a new migration by creating the next numbered pair, for example `migrations/00002_add_deadline_column.up.sql` and `...down.sql`, then run `task migrate`.
+Add a new migration by creating the next numbered pair, for example `migrations/00003_add_deadline_column.up.sql` and `...down.sql`, then run `task migrate`.
 
 ## Configuration
-
-Everything is configured through one variable:
 
 | Variable | Required | Example |
 | -------- | -------- | ------- |
 | DATABASE_URL | Yes | postgres://user:password@localhost:5432/jobtracker?sslmode=disable |
+| BASE_URL | No | https://jt.example.com — domain used in short links, defaults to http://localhost:8080 |
+| ADDR | No | :9000 — address the redirect server listens on, defaults to the port in BASE_URL or 8080 |
 
-Loaded from `.env` if present, otherwise from the environment. There is no `.env.example` checked in — copy the line above to start your own.
+Loaded from `.env` if present, otherwise from the environment. There is no `.env.example` checked in — copy the lines above to start your own.
 
 CSV exports from the dashboard or CLI default to the current directory (e.g. `applications-20260925-023302.csv`). They are gitignored so they do not end up in commits.
 
@@ -299,9 +355,16 @@ Double-check spelling against the list above. Only those seven values are accept
 
 Use `2026-09-28`, `2026-09-28 14:30:00`, or full RFC3339 like `2026-09-28T14:30:00Z`.
 
+**`invalid URL "..." : only http and https are supported`**
+
+Short links only make sense for web pages. Use an `http://` or `https://` posting — a `mailto:` or `ftp:` address cannot be redirected to.
+
+**A short link returns 404**
+
+The code is not in `short_urls`. Either the row was rolled back with `task migrate-down`, or the server is pointed at a different database than the one the link was created against. Check that `DATABASE_URL` matches on both.
+
 ## Further reading
 
-- `learning.md` in this repo walks through how the Bubble Tea dashboard is put together and suggests a learning path if you want to build your own.
 - Run `go run ./cmd/jobtracker --help` or `go run ./cmd/jobtracker <command> --help` for full flag reference.
 
 ## License

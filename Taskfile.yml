@@ -33,7 +33,7 @@ tasks:
       - go run ./cmd/jobtracker show --id "{{.ID}}"
 
   add:
-    desc: Add an application (COMPANY="..." TITLE="..." [STATUS=...] [LOCATION=...] [SOURCE=...] [JOB_URL=...] [NOTES=...] [APPLIED_AT=...])
+    desc: Add an application (COMPANY="..." TITLE="..." [STATUS=...] [LOCATION=...] [SOURCE=...] [JOB_URL=...] [NOTES=...] [APPLIED_AT=...]). A JOB_URL is shortened automatically.
     cmds:
       - go run ./cmd/jobtracker add --company "{{.COMPANY}}" --title "{{.TITLE}}" --status "{{.STATUS | default "applied"}}" --location "{{.LOCATION}}" --source "{{.SOURCE}}" --job-url "{{.JOB_URL}}" --notes "{{.NOTES}}" --applied-at "{{.APPLIED_AT}}"
 
@@ -72,6 +72,11 @@ tasks:
     cmds:
       - task: cli
         vars: { ARGS: tui }
+
+  serve:
+    desc: Start the short link redirect server (ADDR=":9000" [BASE_URL=...])
+    cmds:
+      - go run ./cmd/serve
 
   dev:
     desc: Migrate up then list applications

@@ -217,6 +217,7 @@ func (m Model) renderDetail(width int) string {
 		detailRow("Location", fallback(app.Location)),
 		detailRow("Source", fallback(app.Source)),
 		detailRow("Job URL", fallback(app.JobURL)),
+		detailRow("Short Link", fallback(m.shortLink)),
 		detailRow("Notes", fallback(app.Notes)),
 		detailRow("Applied", formatDate(app.AppliedAt)),
 		detailRow("Updated", formatDate(app.UpdatedAt)),
@@ -250,6 +251,7 @@ func (m Model) renderForm(width int) string {
 		rows = append(rows, errorStyle.Render(m.formErr))
 	}
 	rows = append(rows, hintStyle.Render("tab/enter next • shift+tab back • enter on Applied saves • esc cancels"))
+	rows = append(rows, hintStyle.Render("A job URL is shortened automatically and stored as a shareable link."))
 	return panelStyle.Width(panelWidth(width)).Render(
 		titleStyle.Render("Add application") + "\n" +
 			lipgloss.JoinVertical(lipgloss.Left, rows...),
