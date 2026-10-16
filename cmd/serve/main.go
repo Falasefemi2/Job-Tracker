@@ -53,6 +53,10 @@ func run() error {
 		Addr:              addr,
 		Handler:           web.NewHandler(resolver),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	errc := make(chan error, 1)

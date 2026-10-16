@@ -17,6 +17,13 @@ type LinkResolver interface {
 }
 
 // NewHandler returns the router for the short link service.
+//
+// Trust boundary: this redirects to whatever long URL is stored for a code. It
+// is effectively an open redirect, which is safe only because codes are minted
+// exclusively through the trusted local CLI/TUI paths (see shortener.Normalize,
+// which still rejects anything that is not http/https). If link creation is
+// ever exposed over HTTP, revisit this: validate the target and reject
+// credentials-in-URL here rather than trusting stored rows.
 func NewHandler(resolver LinkResolver) http.Handler {
 	h := &handler{resolver: resolver}
 	mux := http.NewServeMux()

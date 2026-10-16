@@ -20,13 +20,20 @@ const (
 	codeAttempts = 5
 )
 
-var ErrCodeTaken = errors.New("short code already taken")
+var (
+	// ErrCodeTaken means the generated code collided with an existing one; the
+	// shortener draws another.
+	ErrCodeTaken = errors.New("short code already taken")
+	// ErrLongURLExists means the URL already has a code, typically because a
+	// concurrent caller inserted it first; the shortener reuses that code.
+	ErrLongURLExists = errors.New("long URL already shortened")
+)
 
 type Store interface {
-	GetByCode(ctx context.Context, code string) (domain.ShortURL, error)
 	GetByLongURL(ctx context.Context, longURL string) (domain.ShortURL, error)
 	Create(ctx context.Context, s domain.ShortURL) error
-	IncrementClicks(ctx context.Context, code string) error
+	// Resolve records a click for code and returns its long URL.
+	Resolve(ctx context.Context, code string) (string, error)
 }
 
 type Shortener struct {
@@ -72,6 +79,15 @@ func (s *Shortener) Shorten(ctx context.Context, rawURL string) (string, error) 
 	}
 
 	code, err := s.create(ctx, longURL)
+	if errors.Is(err, ErrLongURLExists) {
+		// Another writer shortened the same URL between our lookup and insert;
+		// hand back their code rather than failing.
+		existing, lookupErr := s.store.GetByLongURL(ctx, longURL)
+		if lookupErr != nil {
+			return "", lookupErr
+		}
+		return s.Link(existing.Code), nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -101,14 +117,7 @@ func (s *Shortener) Resolve(ctx context.Context, code string) (string, error) {
 	if code == "" {
 		return "", fmt.Errorf("empty short code: %w", sql.ErrNoRows)
 	}
-	short, err := s.store.GetByCode(ctx, code)
-	if err != nil {
-		return "", err
-	}
-	if err := s.store.IncrementClicks(ctx, code); err != nil {
-		return "", fmt.Errorf("record click for %s: %w", code, err)
-	}
-	return short.LongURL, nil
+	return s.store.Resolve(ctx, code)
 }
 
 func (s *Shortener) create(ctx context.Context, longURL string) (string, error) {
@@ -118,13 +127,18 @@ func (s *Shortener) create(ctx context.Context, longURL string) (string, error) 
 		if err != nil {
 			return "", err
 		}
-		lastErr = s.store.Create(ctx, domain.ShortURL{Code: code, LongURL: longURL})
-		if lastErr == nil {
+		err = s.store.Create(ctx, domain.ShortURL{Code: code, LongURL: longURL})
+		if err == nil {
 			return code, nil
 		}
-		if !errors.Is(lastErr, ErrCodeTaken) {
-			return "", lastErr
+		if errors.Is(err, ErrLongURLExists) {
+			// Not retryable here; the caller re-reads the winning code.
+			return "", err
 		}
+		if !errors.Is(err, ErrCodeTaken) {
+			return "", err
+		}
+		lastErr = err
 	}
 	return "", fmt.Errorf("could not allocate a short code for %s: %w", longURL, lastErr)
 }

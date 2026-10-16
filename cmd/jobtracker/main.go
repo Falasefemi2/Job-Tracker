@@ -163,11 +163,11 @@ func newAddCommand() *cobra.Command {
 			if strings.TrimSpace(input.title) == "" {
 				return errors.New("--title is required")
 			}
-			status, err := normalizeStatus(input.status)
+			status, err := domain.ParseStatus(input.status)
 			if err != nil {
 				return err
 			}
-			appliedAt, err := parseAppliedDate(input.appliedAt)
+			appliedAt, err := domain.ParseDate(input.appliedAt)
 			if err != nil {
 				return err
 			}
@@ -223,7 +223,7 @@ func newUpdateCommand() *cobra.Command {
 				updated.JobTitle = input.title
 			}
 			if cmd.Flags().Changed("status") {
-				status, err := normalizeStatus(input.status)
+				status, err := domain.ParseStatus(input.status)
 				if err != nil {
 					return err
 				}
@@ -250,7 +250,7 @@ func newUpdateCommand() *cobra.Command {
 				if strings.TrimSpace(input.appliedAt) == "" {
 					return errors.New("applied-at cannot be empty when provided; omit the flag to keep the current value")
 				}
-				appliedAt, err := parseAppliedDate(input.appliedAt)
+				appliedAt, err := domain.ParseDate(input.appliedAt)
 				if err != nil {
 					return err
 				}
@@ -391,35 +391,4 @@ func addApplicationFlags(cmd *cobra.Command, input *applicationInput, defaultSta
 	cmd.Flags().StringVarP(&input.jobURL, "job-url", "u", "", "Job posting URL")
 	cmd.Flags().StringVarP(&input.notes, "notes", "n", "", "Notes")
 	cmd.Flags().StringVar(&input.appliedAt, "applied-at", "", "Applied date: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, or RFC3339")
-}
-
-func normalizeStatus(value string) (domain.Status, error) {
-	switch status := domain.Status(strings.ToLower(strings.TrimSpace(value))); status {
-	case domain.StatusApplied,
-		domain.StatusScreening,
-		domain.StatusInterviewing,
-		domain.StatusOffer,
-		domain.StatusAccepted,
-		domain.StatusRejected,
-		domain.StatusWithdrawn:
-		return status, nil
-	default:
-		return "", errors.New(`invalid status: expected one of "applied", "screening", "interviewing", "offer", "accepted", "rejected", or "withdrawn"`)
-	}
-}
-
-func parseAppliedDate(value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
-	}
-	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return parsed, nil
-	}
-	for _, layout := range []string{time.DateTime, time.DateOnly} {
-		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
-			return parsed, nil
-		}
-	}
-	return time.Time{}, errors.New("invalid applied-at date: use YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, or RFC3339")
 }
