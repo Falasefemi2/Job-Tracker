@@ -2,18 +2,6 @@ package domain
 
 import "time"
 
-type Status string
-
-const (
-	StatusApplied      Status = "applied"
-	StatusScreening    Status = "screening"
-	StatusInterviewing Status = "interviewing"
-	StatusOffer        Status = "offer"
-	StatusAccepted     Status = "accepted"
-	StatusRejected     Status = "rejected"
-	StatusWithdrawn    Status = "withdrawn"
-)
-
 type Application struct {
 	ID        int64
 	Company   string

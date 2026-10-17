@@ -237,7 +237,7 @@ Two tables. `applications`:
 | id | bigint, identity | Primary key, auto-generated |
 | company | text, required | Company you applied to |
 | job_title | text, required | Job title |
-| status | text, default `applied` | One of the statuses below |
+| status | text, default `applied` | One of the statuses below; enforced by a CHECK constraint |
 | location | text, nullable | e.g. Remote, Lagos, London |
 | source | text, nullable | e.g. LinkedIn, referral, company site |
 | job_url | text, nullable | Link to the posting, normalized on save |
@@ -261,7 +261,7 @@ Valid statuses:
 applied, screening, interviewing, offer, accepted, rejected, withdrawn
 ```
 
-Status input is case-insensitive, so `Offer`, `OFFER`, and `offer` all work.
+Status input is case-insensitive, so `Offer`, `OFFER`, and `offer` all work. The allowed values are enforced at the database level as well as in the CLI/TUI, and `applied_at` and `status` are indexed to keep listing and stats fast as the table grows.
 
 ## Project structure
 
@@ -272,16 +272,18 @@ cmd/
   serve/main.go        Short link redirect server.
 internal/
   db/                  Opens the Postgres connection with pgx.
-  domain/              Core types: Application, Status, Stats, ShortURL. No database code.
+  domain/              Core types (Application, Status, Stats, ShortURL) and the shared status/date parsers. No database code.
   repo/                SQL queries: applications CRUD, stats, CSV export, short_urls.
   shortener/           URL normalization, base62 code generation, short link building.
-  tui/                 Dashboard. ui.go holds state and key handling, view.go holds rendering.
+  tui/                 Dashboard. tui.go holds state and key handling, view.go holds rendering.
   web/                 HTTP handler behind the short links.
 migrations/
   00001_...up.sql     Creates the applications table.
   00001_...down.sql   Drops it again for rollback.
   00002_...up.sql     Creates the short_urls table.
   00002_...down.sql   Drops it again for rollback.
+  00003_...up.sql     Adds the status CHECK constraint and indexes.
+  00003_...down.sql   Drops them again for rollback.
 Taskfile.yml           Short aliases for common commands.
 ```
 
@@ -351,7 +353,7 @@ Use a modern terminal (Windows Terminal, WezTerm, Alacritty, iTerm2, GNOME Termi
 
 Double-check spelling against the list above. Only those seven values are accepted.
 
-**`invalid applied-at date` error**
+**`invalid date` error**
 
 Use `2026-09-28`, `2026-09-28 14:30:00`, or full RFC3339 like `2026-09-28T14:30:00Z`.
 

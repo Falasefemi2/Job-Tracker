@@ -12,10 +12,13 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/joho/godotenv"
+
+	"github.com/Falasefemi2/jobtracker/internal/db"
 )
 
 func main() {
+	_ = godotenv.Load()
 	if err := run(context.Background(), os.Args[1:], os.Getenv("DATABASE_URL"), "migrations"); err != nil {
 		log.Fatal(err)
 	}
@@ -33,20 +36,22 @@ func run(ctx context.Context, args []string, databaseURL, dir string) error {
 		return errors.New("DATABASE_URL is required")
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	// Reuse the shared opener so migrations get the same connection handling
+	// (pool sizing, pooler query-mode workaround) as the rest of the app.
+	database, err := db.Open(ctx, databaseURL)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return err
 	}
-	defer db.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			log.Printf("close database: %v", err)
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping database: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
+	if _, err := database.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY)`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
@@ -60,7 +65,7 @@ func run(ctx context.Context, args []string, databaseURL, dir string) error {
 	}
 
 	applied := map[string]bool{}
-	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	rows, err := database.QueryContext(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
 		return err
 	}
@@ -83,7 +88,7 @@ func run(ctx context.Context, args []string, databaseURL, dir string) error {
 			if applied[version] {
 				continue
 			}
-			if err := applyFile(ctx, db, f, version, true); err != nil {
+			if err := applyFile(ctx, database, f, version, true); err != nil {
 				return err
 			}
 			log.Printf("migrated up: %s", version)
@@ -105,7 +110,7 @@ func run(ctx context.Context, args []string, databaseURL, dir string) error {
 		if _, err := os.Stat(down); err != nil {
 			return fmt.Errorf("missing down file %s: %w", down, err)
 		}
-		if err := applyFile(ctx, db, down, last, false); err != nil {
+		if err := applyFile(ctx, database, down, last, false); err != nil {
 			return err
 		}
 		log.Printf("migrated down: %s", last)

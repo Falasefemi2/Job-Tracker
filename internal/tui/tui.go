@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,7 +19,6 @@ import (
 type applicationStore interface {
 	List(ctx context.Context) ([]domain.Application, error)
 	Stats(ctx context.Context) (domain.Stats, error)
-	GetByID(ctx context.Context, id int64) (domain.Application, error)
 	Create(ctx context.Context, a domain.Application) (int64, error)
 	Update(ctx context.Context, id int64, a domain.Application) error
 	Delete(ctx context.Context, id int64) error
@@ -145,19 +145,10 @@ func NewModel(ctx context.Context, store applicationStore, shortener linkShorten
 	exportInput.Width = 52
 
 	return Model{
-		ctx:       ctx,
-		store:     store,
-		shortener: shortener,
-		statuses: []string{
-			"all",
-			string(domain.StatusApplied),
-			string(domain.StatusScreening),
-			string(domain.StatusInterviewing),
-			string(domain.StatusOffer),
-			string(domain.StatusAccepted),
-			string(domain.StatusRejected),
-			string(domain.StatusWithdrawn),
-		},
+		ctx:         ctx,
+		store:       store,
+		shortener:   shortener,
+		statuses:    statusFilterOptions(),
 		search:      search,
 		exportInput: exportInput,
 		form:        newForm(),
@@ -179,6 +170,16 @@ func Run(ctx context.Context, store applicationStore, shortener linkShortener) e
 	program := tea.NewProgram(NewModel(ctx, store, shortener), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
+}
+
+// statusFilterOptions is the status filter menu: "all" followed by every known
+// status in lifecycle order.
+func statusFilterOptions() []string {
+	options := []string{"all"}
+	for _, status := range domain.Statuses() {
+		options = append(options, string(status))
+	}
+	return options
 }
 
 func newForm() formModel {
@@ -253,7 +254,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.form = newForm()
 		m.formErr = ""
 		m.view = viewList
-		m.notice = "Created application #" + itoa(int(msg.id))
+		m.notice = "Created application #" + strconv.Itoa(int(msg.id))
 		if msg.shortLink != "" {
 			m.notice += " — " + msg.shortLink
 		}
@@ -530,15 +531,7 @@ func (m Model) saveStatus() (Model, tea.Cmd) {
 }
 
 func nextStatus(current domain.Status, delta int) domain.Status {
-	order := []domain.Status{
-		domain.StatusApplied,
-		domain.StatusScreening,
-		domain.StatusInterviewing,
-		domain.StatusOffer,
-		domain.StatusAccepted,
-		domain.StatusRejected,
-		domain.StatusWithdrawn,
-	}
+	order := domain.Statuses()
 	index := 0
 	for i, status := range order {
 		if status == current {
@@ -592,12 +585,12 @@ func (m Model) submitForm() (Model, tea.Cmd) {
 		m.formErr = "Job title is required"
 		return m, nil
 	}
-	status, err := parseStatus(m.form.fields[fieldStatus].Value())
+	status, err := domain.ParseStatus(m.form.fields[fieldStatus].Value())
 	if err != nil {
 		m.formErr = err.Error()
 		return m, nil
 	}
-	appliedAt, err := parseDate(m.form.fields[fieldAppliedAt].Value())
+	appliedAt, err := domain.ParseDate(m.form.fields[fieldAppliedAt].Value())
 	if err != nil {
 		m.formErr = err.Error()
 		return m, nil
@@ -625,9 +618,11 @@ func (m Model) submitForm() (Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		link := ""
 		if shortener != nil {
-			if link, err = shortener.Shorten(ctx, jobURL); err != nil {
+			minted, err := shortener.Shorten(ctx, jobURL)
+			if err != nil {
 				return applicationSavedMsg{err: err}
 			}
+			link = minted
 		}
 		id, err := store.Create(ctx, app)
 		return applicationSavedMsg{id: id, shortLink: link, err: err}

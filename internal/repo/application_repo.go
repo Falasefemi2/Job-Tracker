@@ -89,8 +89,8 @@ func (r *ApplicationRepo) List(ctx context.Context) ([]domain.Application, error
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, company, job_title, status, location, source, job_url, notes, applied_at, created_at, updated_at
 		FROM applications
-		ORDER BY applied_at DESC 
-		`)
+		ORDER BY applied_at DESC
+	`)
 	if err != nil {
 		return nil, err
 	}

@@ -20,6 +20,14 @@ type fakeStore struct {
 	collideEvery bool
 	lookupErr    error
 	createErr    error
+	resolveErr   error
+
+	// raceOnLongURL simulates a concurrent writer shortening the same URL: the
+	// first lookup misses, Create reports ErrLongURLExists, and the winning code
+	// is already present when the shortener looks again.
+	raceOnLongURL bool
+	raceLooked    bool
+	raceCreated   bool
 }
 
 func newFakeStore() *fakeStore {
@@ -29,17 +37,13 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func (f *fakeStore) GetByCode(ctx context.Context, code string) (domain.ShortURL, error) {
-	short, ok := f.byCode[code]
-	if !ok {
-		return domain.ShortURL{}, fmt.Errorf("short code %q not found: %w", code, sql.ErrNoRows)
-	}
-	return short, nil
-}
-
 func (f *fakeStore) GetByLongURL(ctx context.Context, longURL string) (domain.ShortURL, error) {
 	if f.lookupErr != nil {
 		return domain.ShortURL{}, f.lookupErr
+	}
+	if f.raceOnLongURL && !f.raceLooked {
+		f.raceLooked = true
+		return domain.ShortURL{}, fmt.Errorf("no short code for %q: %w", longURL, sql.ErrNoRows)
 	}
 	short, ok := f.byLongURL[longURL]
 	if !ok {
@@ -52,6 +56,13 @@ func (f *fakeStore) Create(ctx context.Context, s domain.ShortURL) error {
 	if f.createErr != nil {
 		return f.createErr
 	}
+	if f.raceOnLongURL && !f.raceCreated {
+		f.raceCreated = true
+		winner := domain.ShortURL{Code: "winner9", LongURL: s.LongURL}
+		f.byCode[winner.Code] = winner
+		f.byLongURL[winner.LongURL] = winner
+		return fmt.Errorf("long URL %s already has a short code: %w", s.LongURL, ErrLongURLExists)
+	}
 	if f.collideEvery || f.collideNext {
 		f.collideNext = false
 		return fmt.Errorf("short code %q is taken: %w", s.Code, ErrCodeTaken)
@@ -62,15 +73,18 @@ func (f *fakeStore) Create(ctx context.Context, s domain.ShortURL) error {
 	return nil
 }
 
-func (f *fakeStore) IncrementClicks(ctx context.Context, code string) error {
-	f.clicks = append(f.clicks, code)
+func (f *fakeStore) Resolve(ctx context.Context, code string) (string, error) {
+	if f.resolveErr != nil {
+		return "", f.resolveErr
+	}
 	short, ok := f.byCode[code]
 	if !ok {
-		return fmt.Errorf("short code %q not found: %w", code, sql.ErrNoRows)
+		return "", fmt.Errorf("short code %q not found: %w", code, sql.ErrNoRows)
 	}
+	f.clicks = append(f.clicks, code)
 	short.Clicks++
 	f.byCode[code] = short
-	return nil
+	return short.LongURL, nil
 }
 
 func TestNormalize(t *testing.T) {
@@ -201,6 +215,22 @@ func TestShortenGivesUpAfterRepeatedCollisions(t *testing.T) {
 	}
 }
 
+func TestShortenReusesLinkWhenLongURLInsertRaces(t *testing.T) {
+	store := newFakeStore()
+	store.raceOnLongURL = true
+
+	link, err := New(store, "https://jt.example.com").Shorten(context.Background(), "https://example.com/jobs/1")
+	if err != nil {
+		t.Fatalf("expected the concurrent insert to be tolerated, got %v", err)
+	}
+	if link != "https://jt.example.com/s/winner9" {
+		t.Fatalf("expected the winning code to be reused, got %q", link)
+	}
+	if len(store.created) != 0 {
+		t.Fatalf("expected no mapping created by this caller, got %+v", store.created)
+	}
+}
+
 func TestShortenSurfacesStoreErrors(t *testing.T) {
 	store := newFakeStore()
 	store.createErr = errors.New("disk on fire")
@@ -262,6 +292,19 @@ func TestResolveEmptyCode(t *testing.T) {
 	_, err := New(newFakeStore(), "").Resolve(context.Background(), "  ")
 	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected sql.ErrNoRows so the handler can answer 404, got %v", err)
+	}
+}
+
+func TestResolveSurfacesStoreErrors(t *testing.T) {
+	store := newFakeStore()
+	store.byCode["aB3xK9z"] = domain.ShortURL{Code: "aB3xK9z", LongURL: "https://example.com/jobs/1"}
+	store.resolveErr = errors.New("connection refused")
+
+	if _, err := New(store, "").Resolve(context.Background(), "aB3xK9z"); err == nil {
+		t.Fatal("expected the store error to propagate")
+	}
+	if len(store.clicks) != 0 {
+		t.Fatalf("expected no click recorded on failure, got %+v", store.clicks)
 	}
 }
 

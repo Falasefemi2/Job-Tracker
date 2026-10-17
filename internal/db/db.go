@@ -11,6 +11,9 @@ import (
 )
 
 func Open(ctx context.Context, databaseURL string) (*sql.DB, error) {
+	// Connection poolers (e.g. Supabase's "-pooler." hosts) cannot serve the
+	// extended query protocol reliably; force the simple protocol unless the
+	// caller has already chosen a query mode.
 	if strings.Contains(databaseURL, "-pooler.") && !strings.Contains(databaseURL, "default_query_exec_mode") {
 		sep := "?"
 		if strings.Contains(databaseURL, "?") {

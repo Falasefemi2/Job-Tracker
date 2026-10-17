@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,7 +72,7 @@ func (m Model) queryStatusLine() string {
 	if strings.TrimSpace(m.query) != "" {
 		parts = append(parts, `search: "`+strings.TrimSpace(m.query)+`"`)
 	}
-	parts = append(parts, `showing `+itoa(len(m.filter))+` of `+itoa(len(m.apps)))
+	parts = append(parts, `showing `+strconv.Itoa(len(m.filter))+` of `+strconv.Itoa(len(m.apps)))
 	if strings.TrimSpace(m.notice) != "" {
 		return noticeStyle.Render(strings.Join(parts, "  •  ") + "  •  " + m.notice)
 	}
@@ -81,10 +81,10 @@ func (m Model) queryStatusLine() string {
 
 func (m Model) renderStats() string {
 	cards := []string{
-		statCard("TOTAL", itoa(m.stats.Total)),
-		statCard("APPLIED", itoa(m.stats.Applied)),
-		statCard("INTERVIEWING", itoa(m.stats.Interviewing)),
-		statCard("OFFERS", itoa(m.stats.Offers)),
+		statCard("TOTAL", strconv.Itoa(m.stats.Total)),
+		statCard("APPLIED", strconv.Itoa(m.stats.Applied)),
+		statCard("INTERVIEWING", strconv.Itoa(m.stats.Interviewing)),
+		statCard("OFFERS", strconv.Itoa(m.stats.Offers)),
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
 }
@@ -167,7 +167,7 @@ func tableColumns(width int) (id, company, title, status, date int) {
 }
 
 func (m Model) renderRow(app domain.Application, selected bool, idWidth, companyWidth, titleWidth, statusWidth, dateWidth int) string {
-	line := padRight(itoa(int(app.ID)), idWidth) + "  " +
+	line := padRight(strconv.Itoa(int(app.ID)), idWidth) + "  " +
 		padRight(truncate(app.Company, companyWidth), companyWidth) + "  " +
 		padRight(truncate(app.JobTitle, titleWidth), titleWidth) + "  " +
 		padRight(truncate(string(app.Status), statusWidth), statusWidth) + "  " +
@@ -228,7 +228,7 @@ func (m Model) renderDetail(width int) string {
 	if strings.TrimSpace(m.opErr) != "" {
 		rows = append(rows, errorStyle.Render(m.opErr))
 	}
-	title := titleStyle.Render("Application #"+itoa(int(app.ID))) + "\n" +
+	title := titleStyle.Render("Application #"+strconv.Itoa(int(app.ID))) + "\n" +
 		lipgloss.JoinVertical(lipgloss.Left, rows...)
 	return panelStyle.Width(panelWidth(width)).Render(title)
 }
@@ -261,7 +261,7 @@ func (m Model) renderForm(width int) string {
 func (m Model) renderConfirm(width int) string {
 	target := m.deleteTarget
 	return panelStyle.Width(panelWidth(width)).Render(
-		errorStyle.Render("Delete application #"+itoa(int(target.ID))+"?") + "\n" +
+		errorStyle.Render("Delete application #"+strconv.Itoa(int(target.ID))+"?") + "\n" +
 			target.Company + " — " + target.JobTitle + "\n" +
 			hintStyle.Render("This cannot be undone.  y deletes • n/esc cancels"),
 	)
@@ -397,60 +397,4 @@ func fallback(value string) string {
 		return "—"
 	}
 	return value
-}
-
-func parseStatus(value string) (domain.Status, error) {
-	switch status := domain.Status(strings.ToLower(strings.TrimSpace(value))); status {
-	case "":
-		return domain.StatusApplied, nil
-	case domain.StatusApplied,
-		domain.StatusScreening,
-		domain.StatusInterviewing,
-		domain.StatusOffer,
-		domain.StatusAccepted,
-		domain.StatusRejected,
-		domain.StatusWithdrawn:
-		return status, nil
-	default:
-		return "", errors.New(`invalid status: use applied, screening, interviewing, offer, accepted, rejected, or withdrawn`)
-	}
-}
-
-func parseDate(value string) (time.Time, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return time.Time{}, nil
-	}
-	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return parsed, nil
-	}
-	for _, layout := range []string{time.DateTime, time.DateOnly} {
-		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
-			return parsed, nil
-		}
-	}
-	return time.Time{}, errors.New("invalid date: use YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, or RFC3339")
-}
-
-func itoa(value int) string {
-	return digits(value)
-}
-
-func digits(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	var out []byte
-	for value > 0 {
-		out = append([]byte{byte('0' + value%10)}, out...)
-		value /= 10
-	}
-	if negative {
-		out = append([]byte{'-'}, out...)
-	}
-	return string(out)
 }

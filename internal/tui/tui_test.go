@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -30,10 +31,6 @@ func (f *fakeStore) List(ctx context.Context) ([]domain.Application, error) {
 
 func (f *fakeStore) Stats(ctx context.Context) (domain.Stats, error) {
 	return f.stats, nil
-}
-
-func (f *fakeStore) GetByID(ctx context.Context, id int64) (domain.Application, error) {
-	return f.apps[0], nil
 }
 
 func (f *fakeStore) Create(ctx context.Context, app domain.Application) (int64, error) {
@@ -70,7 +67,7 @@ func (f *fakeStore) ExportAsCSV(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	for _, app := range f.apps {
-		if err := writer.Write([]string{itoa(int(app.ID)), app.Company}); err != nil {
+		if err := writer.Write([]string{strconv.Itoa(int(app.ID)), app.Company}); err != nil {
 			return err
 		}
 	}
@@ -181,24 +178,24 @@ func TestTruncateAndPad(t *testing.T) {
 }
 
 func TestParseStatus(t *testing.T) {
-	status, err := parseStatus("")
+	status, err := domain.ParseStatus("")
 	if err != nil || status != domain.StatusApplied {
 		t.Fatalf("expected default applied status, got %q %v", status, err)
 	}
-	if _, err := parseStatus("nope"); err == nil {
+	if _, err := domain.ParseStatus("nope"); err == nil {
 		t.Fatal("expected invalid status error")
 	}
 }
 
 func TestParseDate(t *testing.T) {
-	parsed, err := parseDate("2026-09-25")
+	parsed, err := domain.ParseDate("2026-09-25")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if parsed.Format(time.DateOnly) != "2026-09-25" {
 		t.Fatalf("unexpected date %s", parsed.Format(time.RFC3339))
 	}
-	if _, err := parseDate("25/09/2026"); err == nil {
+	if _, err := domain.ParseDate("25/09/2026"); err == nil {
 		t.Fatal("expected invalid date error")
 	}
 }
