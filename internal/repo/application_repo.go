@@ -77,7 +77,11 @@ func (r *ApplicationRepo) GetByID(ctx context.Context, id int64) (domain.Applica
 		WHERE id = $1
 		`, id), &a)
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Application{}, fmt.Errorf("application ID %d not found: %w", id, sql.ErrNoRows)
+		return domain.Application{}, fmt.Errorf(
+			"application ID %d not found: %w",
+			id,
+			sql.ErrNoRows,
+		)
 	}
 	if err != nil {
 		return domain.Application{}, err

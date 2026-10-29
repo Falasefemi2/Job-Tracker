@@ -81,10 +81,22 @@ func TestNormalize(t *testing.T) {
 		wantErr string
 	}{
 		{name: "empty stays empty", raw: "   ", want: ""},
-		{name: "bare host gains https", raw: "boards.example.com/jobs/1", want: "https://boards.example.com/jobs/1"},
+		{
+			name: "bare host gains https",
+			raw:  "boards.example.com/jobs/1",
+			want: "https://boards.example.com/jobs/1",
+		},
 		{name: "existing scheme kept", raw: "http://example.com/a", want: "http://example.com/a"},
-		{name: "query preserved", raw: "example.com/jobs?id=7&x=1", want: "https://example.com/jobs?id=7&x=1"},
-		{name: "unsupported scheme", raw: "ftp://files.example.com/job", wantErr: "only http and https"},
+		{
+			name: "query preserved",
+			raw:  "example.com/jobs?id=7&x=1",
+			want: "https://example.com/jobs?id=7&x=1",
+		},
+		{
+			name:    "unsupported scheme",
+			raw:     "ftp://files.example.com/job",
+			wantErr: "only http and https",
+		},
 		{name: "missing host", raw: "https:///jobs/1", wantErr: "missing host"},
 	}
 	for _, tc := range cases {
@@ -212,7 +224,10 @@ func TestShortenSurfacesStoreErrors(t *testing.T) {
 
 func TestLookupDoesNotCreate(t *testing.T) {
 	store := newFakeStore()
-	store.byLongURL["https://example.com/jobs/1"] = domain.ShortURL{Code: "aB3xK9z", LongURL: "https://example.com/jobs/1"}
+	store.byLongURL["https://example.com/jobs/1"] = domain.ShortURL{
+		Code:    "aB3xK9z",
+		LongURL: "https://example.com/jobs/1",
+	}
 	s := New(store, "https://jt.example.com")
 
 	link, err := s.Lookup(context.Background(), "example.com/jobs/1")
@@ -234,7 +249,10 @@ func TestLookupDoesNotCreate(t *testing.T) {
 
 func TestResolveIncrementsClicks(t *testing.T) {
 	store := newFakeStore()
-	store.byCode["aB3xK9z"] = domain.ShortURL{Code: "aB3xK9z", LongURL: "https://example.com/jobs/1"}
+	store.byCode["aB3xK9z"] = domain.ShortURL{
+		Code:    "aB3xK9z",
+		LongURL: "https://example.com/jobs/1",
+	}
 	s := New(store, "")
 
 	for i := 1; i <= 3; i++ {
@@ -266,7 +284,10 @@ func TestResolveEmptyCode(t *testing.T) {
 }
 
 func TestLinkTrimsBaseURL(t *testing.T) {
-	if got := New(newFakeStore(), "  https://jt.example.com///  ").Link("aB3xK9z"); got != "https://jt.example.com/s/aB3xK9z" {
+	if got := New(
+		newFakeStore(),
+		"  https://jt.example.com///  ",
+	).Link("aB3xK9z"); got != "https://jt.example.com/s/aB3xK9z" {
 		t.Fatalf("unexpected link %q", got)
 	}
 	if got := New(newFakeStore(), "").Link("  "); got != "" {
